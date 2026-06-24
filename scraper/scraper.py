@@ -1,6 +1,7 @@
 """
-Christoph 47 ADS-B Scraper Daemon
+German Rescue Helicopter ADS-B Scraper Daemon
 Polls globe.adsbexchange.com and stores flight data to TimescaleDB.
+Tracks all German rescue helicopters (Christoph, Libelle, Pegasus, …).
 """
 
 import json
@@ -16,10 +17,10 @@ import requests
 
 from config import (
     ADSB_ALL_URL,
-    CALLSIGN_VARIANTS,
     DATABASE_URL,
     HEADERS,
     POLL_INTERVAL,
+    RESCUE_PREFIXES,
 )
 from models import (
     CREATE_AIRCRAFT_CACHE,
@@ -37,7 +38,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
-log = logging.getLogger("chx47-scraper")
+log = logging.getLogger("rescue-scraper")
 
 _running = True
 
@@ -65,10 +66,7 @@ def init_db(conn):
 
 
 def fetch_all_aircraft(session: requests.Session) -> list[dict]:
-    """
-    Fetch all aircraft from ADS-B Exchange globe API.
-    The globe frontend uses /re-api/?all to get the full aircraft list.
-    """
+    """Fetch all aircraft from ADS-B Exchange globe API."""
     try:
         resp = session.get(ADSB_ALL_URL, params={"all": ""}, timeout=15)
         resp.raise_for_status()
@@ -86,31 +84,18 @@ def fetch_all_aircraft(session: requests.Session) -> list[dict]:
         return []
 
 
-def fetch_by_callsign(session: requests.Session, callsign: str) -> list[dict]:
-    """
-    Fetch specific aircraft by callsign using the find_by_callsign endpoint.
-    Used when the full-list approach doesn't find CHX47 (e.g., below radar horizon).
-    """
-    try:
-        resp = session.get(
-            ADSB_ALL_URL,
-            params={"find_by_callsign": callsign},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data.get("aircraft", [])
-    except (requests.RequestException, json.JSONDecodeError) as e:
-        log.debug("Callsign search error for %s: %s", callsign, e)
-        return []
+def is_rescue_helicopter(callsign: str) -> bool:
+    """Return True if callsign matches a known German rescue helicopter prefix."""
+    cs = callsign.strip().upper()
+    return any(cs.startswith(prefix) for prefix in RESCUE_PREFIXES)
 
 
-def filter_christoph47(aircraft_list: list[dict]) -> list[dict]:
-    """Return only aircraft whose callsign matches a known Christoph 47 variant."""
+def filter_rescue(aircraft_list: list[dict]) -> list[dict]:
+    """Return only aircraft whose callsign matches a rescue helicopter prefix."""
     results = []
     for ac in aircraft_list:
-        callsign = (ac.get("flight") or ac.get("r") or "").strip().upper()
-        if callsign in CALLSIGN_VARIANTS:
+        callsign = (ac.get("flight") or ac.get("r") or "").strip()
+        if callsign and is_rescue_helicopter(callsign):
             results.append(ac)
     return results
 
@@ -173,21 +158,19 @@ def store_positions(conn, rows: list[dict]):
                 psycopg2.extras.execute_batch(
                     cur,
                     UPSERT_AIRCRAFT,
-                    [
-                        {
-                            "icao_hex": row["icao_hex"],
-                            "callsign": row["callsign"],
-                            "registration": row["registration"],
-                            "aircraft_type": row["aircraft_type"],
-                        }
-                    ],
+                    [{
+                        "icao_hex": row["icao_hex"],
+                        "callsign": row["callsign"],
+                        "registration": row["registration"],
+                        "aircraft_type": row["aircraft_type"],
+                    }],
                 )
     conn.commit()
 
 
 def run():
-    log.info("Christoph 47 ADS-B scraper starting up")
-    log.info("Tracking callsigns: %s", CALLSIGN_VARIANTS)
+    log.info("German rescue helicopter ADS-B scraper starting")
+    log.info("Tracking prefixes: %s", RESCUE_PREFIXES)
     log.info("Poll interval: %.1fs", POLL_INTERVAL)
 
     conn = None
@@ -217,15 +200,7 @@ def run():
         ts = datetime.now(timezone.utc)
 
         aircraft_list = fetch_all_aircraft(session)
-        matches = filter_christoph47(aircraft_list)
-
-        # If not found in full list, try targeted callsign search
-        if not matches:
-            for cs in CALLSIGN_VARIANTS:
-                direct = fetch_by_callsign(session, cs)
-                if direct:
-                    matches.extend(filter_christoph47(direct))
-                    break
+        matches = filter_rescue(aircraft_list)
 
         if matches:
             rows = [parse_aircraft(ac, ts) for ac in matches]
@@ -235,22 +210,18 @@ def run():
                 if r["icao_hex"] and r["icao_hex"] not in known_icao:
                     known_icao.add(r["icao_hex"])
                     log.info(
-                        "Discovered Christoph 47 | ICAO: %s | Reg: %s | Type: %s",
-                        r["icao_hex"], r["registration"], r["aircraft_type"],
+                        "Discovered %s | ICAO: %s | Reg: %s | Type: %s",
+                        r["callsign"], r["icao_hex"], r["registration"], r["aircraft_type"],
                     )
 
             if rows:
+                callsigns = {r["callsign"] for r in rows if r["callsign"]}
                 try:
                     store_positions(conn, rows)
                     total_stored += len(rows)
                     log.info(
-                        "Stored %d position(s) | alt=%s ft | spd=%s kt | lat=%.4f lon=%.4f | total=%d",
-                        len(rows),
-                        rows[0]["altitude_ft"],
-                        rows[0]["ground_speed_kt"],
-                        rows[0]["lat"] or 0,
-                        rows[0]["lon"] or 0,
-                        total_stored,
+                        "Stored %d position(s) for %s | total=%d",
+                        len(rows), sorted(callsigns), total_stored,
                     )
                 except psycopg2.Error as e:
                     log.error("DB write error: %s", e)
@@ -261,7 +232,7 @@ def run():
                     except psycopg2.OperationalError:
                         pass
         else:
-            log.debug("Christoph 47 not currently airborne or visible")
+            log.debug("No rescue helicopters currently visible")
 
         elapsed = time.monotonic() - loop_start
         sleep_time = max(0.0, POLL_INTERVAL - elapsed)
