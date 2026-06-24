@@ -25,8 +25,11 @@ const KNOWN_SITES = [
   { name: "BG Klinikum Hamburg", lat: 53.5509, lon: 10.0195, type: "Krankenhaus" },
   // Schleswig-Holstein / Usedom
   { name: "Klinikum Greifswald Heringsdorf", lat: 53.9610, lon: 14.1560, type: "Krankenhaus" },
-  // Heimatstandort
-  { name: "Christoph 47 Basis (Greifswald)", lat: 54.1007, lon: 13.4005, type: "Heimatbasis" },
+  // Heimatstandorte (Auswahl bekannter RTH-Basen)
+  { name: "CHX47 Basis Greifswald", lat: 54.1007, lon: 13.4005, type: "Heimatbasis" },
+  { name: "CHX3 Basis Köln-Bonn", lat: 50.8660, lon: 7.1427, type: "Heimatbasis" },
+  { name: "CHX1 Basis Frankfurt", lat: 50.0379, lon: 8.5622, type: "Heimatbasis" },
+  { name: "CHX23 Basis Wittlich", lat: 49.9868, lon: 6.8697, type: "Heimatbasis" },
 ];
 
 const RADIUS_M = 600;

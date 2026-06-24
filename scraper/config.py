@@ -7,11 +7,26 @@ DATABASE_URL = os.environ.get(
 
 POLL_INTERVAL = float(os.environ.get("POLL_INTERVAL", "8"))
 
-# Callsigns to track (Christoph 47 may appear under slight variants)
-CALLSIGN_FILTER = os.environ.get("CALLSIGN_FILTER", "CHRISTOPH47")
-CALLSIGN_VARIANTS = {c.strip().upper() for c in CALLSIGN_FILTER.split(",")}
+# Callsign prefixes for German rescue helicopters.
+# Matches any callsign that STARTS WITH one of these strings (case-insensitive).
+# Override via env var: RESCUE_PREFIXES=CHRISTOPH,LIBELLE,SAR
+_prefix_env = os.environ.get("RESCUE_PREFIXES", "")
+if _prefix_env:
+    RESCUE_PREFIXES: tuple[str, ...] = tuple(
+        p.strip().upper() for p in _prefix_env.split(",") if p.strip()
+    )
+else:
+    RESCUE_PREFIXES = (
+        # Primary ADS-B callsign format for German rescue helicopters: CHX + number
+        # e.g. CHX47 = Christoph 47, CHX1 = Christoph 1, CHX23 = Christoph 23
+        "CHX",          # All numbered Christoph stations (CHX1–CHX99+)
+        # Some stations broadcast under alternative prefixes:
+        "LIBELLE",      # ADAC Libelle stations (LIBELLE3, LIBELLE7, …)
+        "PEGASUS",      # ADAC Pegasus München
+        "MARTIN",       # ADAC Martin München Trauma Center
+    )
 
-# ADS-B Exchange endpoints — reverse-engineered from globe.adsbexchange.com
+# ADS-B Exchange endpoints
 ADSB_BASE = "https://globe.adsbexchange.com"
 ADSB_ALL_URL = f"{ADSB_BASE}/re-api/"
 
