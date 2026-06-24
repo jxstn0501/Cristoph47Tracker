@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Leaflet z-index fix inside dark layout */
+.leaflet-container {
+  background: #1e293b;
+  border-radius: 0.5rem;
+}
+
+.leaflet-popup-content-wrapper {
+  background: #1e293b;
+  color: #f1f5f9;
+  border: 1px solid #334155;
+}
+
+.leaflet-popup-tip {
+  background: #1e293b;
+}
+
+/* Pulse animation for live indicator */
+@keyframes pulse-red {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.pulse-red {
+  animation: pulse-red 1.5s ease-in-out infinite;
+}

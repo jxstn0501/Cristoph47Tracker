@@ -71,34 +71,42 @@ def flight_missions(
     days: int = Query(default=30, ge=1, le=365),
 ):
     """
-    Detect individual missions (flights) by finding gaps > 10 minutes
-    between position reports. Returns mission summary statistics.
+    Detect individual missions by finding gaps > 10 minutes between position
+    reports. Returns start/end times and landing coordinates for classification.
     """
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute("""
-            WITH gaps AS (
-                SELECT
-                    time,
-                    lat, lon, altitude_ft, ground_speed_kt, on_ground,
-                    LAG(time) OVER (ORDER BY time) AS prev_time
+            WITH positions AS (
+                SELECT time, lat, lon,
+                       LAG(time)  OVER (ORDER BY time) AS prev_time,
+                       LEAD(time) OVER (ORDER BY time) AS next_time,
+                       LEAD(lat)  OVER (ORDER BY time) AS next_lat,
+                       LEAD(lon)  OVER (ORDER BY time) AS next_lon
                 FROM flight_positions
-                WHERE callsign ILIKE 'CHRISTOPH47%'
+                WHERE callsign ILIKE 'CHRISTOPH47%%'
                   AND time >= NOW() - INTERVAL '1 day' * %(days)s
-                ORDER BY time
             ),
-            mission_starts AS (
-                SELECT time,
-                       ROW_NUMBER() OVER (ORDER BY time) AS mission_id
-                FROM gaps
+            starts AS (
+                SELECT time AS start_time, lat AS start_lat, lon AS start_lon,
+                       ROW_NUMBER() OVER (ORDER BY time) AS rn
+                FROM positions
                 WHERE prev_time IS NULL
                    OR EXTRACT(EPOCH FROM (time - prev_time)) > 600
+            ),
+            ends AS (
+                SELECT time AS end_time, lat AS end_lat, lon AS end_lon,
+                       ROW_NUMBER() OVER (ORDER BY time) AS rn
+                FROM positions
+                WHERE next_time IS NULL
+                   OR EXTRACT(EPOCH FROM (next_time - time)) > 600
             )
             SELECT
-                ms.mission_id,
-                ms.time AS start_time,
-                LEAD(ms.time) OVER (ORDER BY ms.mission_id) AS end_time
-            FROM mission_starts ms
-            ORDER BY ms.mission_id DESC
+                s.rn AS mission_id,
+                s.start_time, s.start_lat, s.start_lon,
+                e.end_time,   e.end_lat,   e.end_lon
+            FROM starts s
+            JOIN ends e ON s.rn = e.rn
+            ORDER BY s.rn DESC
             LIMIT 50
         """, {"days": days})
         rows = cur.fetchall()
