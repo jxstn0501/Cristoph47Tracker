@@ -1,0 +1,49 @@
+version: "3.8"
+
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: christoph47_db
+    environment:
+      POSTGRES_DB: christoph47
+      POSTGRES_USER: tracker
+      POSTGRES_PASSWORD: tracker_secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tracker -d christoph47"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  scraper:
+    build:
+      context: ./scraper
+    container_name: christoph47_scraper
+    environment:
+      DATABASE_URL: postgresql://tracker:tracker_secret@db:5432/christoph47
+      POLL_INTERVAL: "8"
+      CALLSIGN_FILTER: "CHRISTOPH47"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  analytics:
+    build:
+      context: ./analytics
+    container_name: christoph47_analytics
+    environment:
+      DATABASE_URL: postgresql://tracker:tracker_secret@db:5432/christoph47
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
