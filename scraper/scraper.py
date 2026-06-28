@@ -120,7 +120,14 @@ def parse_aircraft(ac: dict, ts: datetime) -> dict:
     if altitude_raw is not None and altitude_raw != "ground":
         altitude_ft = _int(altitude_raw)
 
-    on_ground = altitude_raw == "ground" or bool(ac.get("ground"))
+    # Primary signal: ADS-B "ground" flag or alt_baro == "ground"
+    # Secondary: very low altitude (<  50 ft) + near-zero speed → treat as on-ground
+    #            This handles transponders that don't set the ground bit correctly.
+    gs = _float(ac.get("gs")) or 0.0
+    vr = abs(_int(ac.get("baro_rate") or ac.get("geom_rate")) or 0)
+    adsb_ground = altitude_raw == "ground" or bool(ac.get("ground"))
+    low_and_slow = (altitude_ft is not None and altitude_ft < 50 and gs < 5 and vr < 100)
+    on_ground = adsb_ground or low_and_slow
 
     emergency = ac.get("emergency")
     if emergency in ("none", "", None):
