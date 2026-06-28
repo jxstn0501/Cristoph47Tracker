@@ -125,47 +125,76 @@ def flight_missions(
     callsign: Optional[str] = Query(default=None),
 ):
     """
-    Detect individual missions by finding gaps > 10 minutes between position
-    reports. Returns start/end times and landing coordinates for classification.
+    Detect individual sorties (Einsätze) by grouping consecutive airborne
+    positions (on_ground=FALSE).  A new sortie begins when:
+      - the helicopter transitions from on_ground=TRUE → FALSE, OR
+      - there is a gap > 5 minutes between airborne positions (ADS-B loss).
+    Only sorties with at least 3 position reports are returned to suppress
+    brief spurious airborne blips.  End coordinates come from the LAST
+    airborne position before the next ground/gap event.
     """
     cs_clause, cs_params = callsign_clause(callsign)
     params = {"days": days, **cs_params}
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(f"""
-            WITH positions AS (
-                SELECT time, lat, lon, callsign,
-                       LAG(time)  OVER (PARTITION BY callsign ORDER BY time) AS prev_time,
-                       LEAD(time) OVER (PARTITION BY callsign ORDER BY time) AS next_time,
-                       LEAD(lat)  OVER (PARTITION BY callsign ORDER BY time) AS next_lat,
-                       LEAD(lon)  OVER (PARTITION BY callsign ORDER BY time) AS next_lon
+            WITH airborne AS (
+                -- Only truly airborne positions
+                SELECT
+                    time, lat, lon, callsign,
+                    on_ground,
+                    LAG(on_ground) OVER (PARTITION BY callsign ORDER BY time) AS prev_on_ground,
+                    LAG(time)      OVER (PARTITION BY callsign ORDER BY time) AS prev_time
                 FROM flight_positions
                 WHERE time >= NOW() - INTERVAL '1 day' * %(days)s
                   AND callsign IS NOT NULL
+                  AND on_ground = FALSE
                   {cs_clause}
             ),
-            starts AS (
-                SELECT callsign, time AS start_time, lat AS start_lat, lon AS start_lon,
-                       ROW_NUMBER() OVER (PARTITION BY callsign ORDER BY time) AS rn
-                FROM positions
-                WHERE prev_time IS NULL
-                   OR EXTRACT(EPOCH FROM (time - prev_time)) > 600
+            -- Mark the first position of each sortie
+            sortie_starts AS (
+                SELECT *,
+                    CASE
+                        WHEN prev_time IS NULL THEN 1
+                        WHEN prev_on_ground = TRUE  THEN 1   -- just took off
+                        WHEN EXTRACT(EPOCH FROM (time - prev_time)) > 300 THEN 1  -- gap > 5 min
+                        ELSE 0
+                    END AS is_start
+                FROM airborne
             ),
-            ends AS (
-                SELECT callsign, time AS end_time, lat AS end_lat, lon AS end_lon,
-                       ROW_NUMBER() OVER (PARTITION BY callsign ORDER BY time) AS rn
-                FROM positions
-                WHERE next_time IS NULL
-                   OR EXTRACT(EPOCH FROM (next_time - time)) > 600
+            -- Assign a sortie number to each position
+            sortie_numbered AS (
+                SELECT *,
+                    SUM(is_start) OVER (PARTITION BY callsign ORDER BY time) AS sortie_no
+                FROM sortie_starts
+            ),
+            -- Aggregate per sortie
+            sortie_agg AS (
+                SELECT
+                    callsign,
+                    sortie_no,
+                    MIN(time)  AS start_time,
+                    MAX(time)  AS end_time,
+                    -- Start position: lat/lon at earliest point in sortie
+                    (ARRAY_AGG(lat  ORDER BY time ASC))[1]  AS start_lat,
+                    (ARRAY_AGG(lon  ORDER BY time ASC))[1]  AS start_lon,
+                    -- End position: lat/lon at latest point in sortie
+                    (ARRAY_AGG(lat  ORDER BY time DESC))[1] AS end_lat,
+                    (ARRAY_AGG(lon  ORDER BY time DESC))[1] AS end_lon,
+                    COUNT(*) AS position_count
+                FROM sortie_numbered
+                GROUP BY callsign, sortie_no
             )
             SELECT
-                s.callsign,
-                s.rn AS mission_id,
-                s.start_time, s.start_lat, s.start_lon,
-                e.end_time,   e.end_lat,   e.end_lon
-            FROM starts s
-            JOIN ends e ON s.callsign = e.callsign AND s.rn = e.rn
-            ORDER BY s.start_time DESC
-            LIMIT 100
+                callsign,
+                ROW_NUMBER() OVER (PARTITION BY callsign ORDER BY start_time DESC) AS mission_id,
+                start_time, start_lat, start_lon,
+                end_time,   end_lat,   end_lon,
+                position_count,
+                EXTRACT(EPOCH FROM (end_time - start_time)) / 60 AS duration_min
+            FROM sortie_agg
+            WHERE position_count >= 3          -- suppress spurious blips
+            ORDER BY start_time DESC
+            LIMIT 200
         """, params)
         rows = cur.fetchall()
     return [dict(r) for r in rows]

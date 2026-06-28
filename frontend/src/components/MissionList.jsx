@@ -29,11 +29,14 @@ function fmtTime(iso) {
   });
 }
 
-function duration(start, end) {
-  if (!start || !end) return null;
-  const s = Math.round((new Date(end) - new Date(start)) / 60000);
-  if (s < 60) return `${s} min`;
-  return `${Math.floor(s / 60)}h ${s % 60}min`;
+function duration(start, end, durMin) {
+  // Prefer server-computed duration_min if available (more accurate)
+  const mins = durMin != null ? Math.round(durMin) : (
+    start && end ? Math.round((new Date(end) - new Date(start)) / 60000) : null
+  );
+  if (mins == null) return null;
+  if (mins < 60) return `${mins} min`;
+  return `${Math.floor(mins / 60)}h ${mins % 60}min`;
 }
 
 export default function MissionList({ missions, selectedCallsign }) {
@@ -63,7 +66,7 @@ export default function MissionList({ missions, selectedCallsign }) {
             const landing = classifyLanding(m.end_lat, m.end_lon);
             const typeStyle = TYPE_STYLE[landing.type] ?? TYPE_STYLE.Unbekannt;
             const icon = TYPE_ICON[landing.type] ?? "❓";
-            const dur = duration(m.start_time, m.end_time);
+            const dur = duration(m.start_time, m.end_time, m.duration_min);
 
             return (
               <tr
